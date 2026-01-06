@@ -1,0 +1,64 @@
+
+# HyDE知识检索工具
+class HyDEKnowledgeRetrievalTool(BaseTool):
+    name: str = "hyde_knowledge_retrieval"
+    description: str = "使用HyDE技术进行知识检索，通过生成假设文档来增强检索效果。"
+
+    model: ClassVar = SentenceTransformer(r"C:/Users/bbk/.cache/huggingface/hub/models--sentence-transformers--all-mpnet-base-v2/snapshots/12e86a3c702fc3c50205a8db88f0ec7c0b6b94a0/")
+    index: ClassVar = faiss.read_index('10_nl2sql/mynl2sql/v1/knowledge_faiss.index')
+    corpus: ClassVar = np.load('10_nl2sql/mynl2sql/v1/knowledge_corpus.npy', allow_pickle=True)
+
+    def _generate_hypothetical_document(self, query: str) -> str:
+        hypothetical_prompt = f"""
+        基于以下查询，生成一个假设的文档片段，这个片段应该包含回答该查询所需的信息：
+
+        查询：{query}
+
+        请生成一个包含相关信息的假设文档片段：
+        """
+        
+        try:
+            response = llm.invoke(hypothetical_prompt)
+            return response.content.strip()
+        except Exception as e:
+            return f"关于{query}的相关信息：这是一个假设的文档片段，包含与查询相关的关键信息。"
+
+    def _run(self, query: str) -> str:
+        try:
+            hypothetical_doc = self._generate_hypothetical_document(query)
+            hypothetical_vec = self.model.encode([hypothetical_doc])
+            D_hypothetical, I_hypothetical = self.index.search(
+                np.array(hypothetical_vec).astype('float32'), k=3
+            )
+            
+            query_vec = self.model.encode([query])
+            D_query, I_query = self.index.search(
+                np.array(query_vec).astype('float32'), k=3
+            )
+            
+            all_indices = list(set(I_hypothetical[0].tolist() + I_query[0].tolist()))
+            results = [self.corpus[idx] for idx in all_indices[:5]]
+            
+            output = f"🔍 HyDE检索结果 (查询: {query})\n"
+            output += f"📄 生成的假设文档: {hypothetical_doc[:200]}...\n\n"
+            output += "📚 检索到的知识片段:\n"
+            output += "\n".join([f"【知识片段{i+1}】{text}" for i, text in enumerate(results)])
+            
+            return output
+            
+        except Exception as e:
+            query_vec = self.model.encode([query])
+            D, I = self.index.search(np.array(query_vec).astype('float32'), k=3)
+            results = [self.corpus[idx] for idx in I[0]]
+            return f"⚠️ HyDE检索失败，使用原始检索方法:\n" + "\n".join([f"【知识片段{i+1}】{text}" for i, text in enumerate(results)])
+
+    async def _arun(self, query: str) -> str:
+        return self._run(query)
+
+
+
+
+    # 使用HyDE检索相关知识
+    hyde_tool = HyDEKnowledgeRetrievalTool()
+    knowledge_result = hyde_tool._run(user_query)
+    
